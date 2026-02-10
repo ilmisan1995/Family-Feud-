@@ -6,19 +6,19 @@ pygame.init()
 pygame.mixer.init()
 WIDTH, HEIGHT = 1561, 958
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Family Feud Global Pro - LED Edition")
+pygame.display.set_caption("Gemini Family Feud Global - 2026 Edition")
 
-# --- KONFIGURASI VISUAL ---
-LED_YELLOW = (255, 255, 0)
-DARK_YELLOW = (60, 60, 0)
+# --- WARNA LED & FONT ---
+KUNING_LED = (255, 255, 0)
+REDUP_LED = (60, 60, 0)
 WHITE, RED, CYAN, PURPLE = (255, 255, 255), (255, 0, 0), (0, 255, 255), (200, 0, 255)
 
-# Font Monospace untuk kesan LED
+# Font Monospace untuk estetika grid LED
 font_led = pygame.font.SysFont("Courier New", 35, bold=True)
 font_led_big = pygame.font.SysFont("Courier New", 70, bold=True)
 font_ui = pygame.font.SysFont("Arial", 22, bold=True)
 
-# --- DATABASE NEGARA & BAHASA ---
+# --- KONFIGURASI GLOBAL NEGARA ---
 LANG_CONFIG = {
     "INDONESIA":   {"code": "id", "label": "BABAK", "total": "TOTAL"},
     "ENGLISH US":  {"code": "us", "label": "ROUND", "total": "TOTAL"},
@@ -30,162 +30,157 @@ LANG_CONFIG = {
 }
 lang_list = list(LANG_CONFIG.keys())
 
-# --- DATA STATE ---
-state = {
-    "is_fast_money": False, "is_edit": False, "is_setting": False,
-    "lang_idx": 0, "volume": 0.5, "wrong_timer": 0,
-    "score_a": 0, "score_b": 0, "round_score": 0, "mult": 1,
+# --- FUNGSI LOAD DATA TXT ---
+def load_soal_db(filename):
+    db = []
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            blocks = f.read().split('---')
+            for block in blocks:
+                lines = [l.strip() for l in block.strip().split('\n') if l.strip()]
+                if not lines: continue
+                h = lines[0].split('|')
+                ans = []
+                for l in lines[1:9]:
+                    p = l.split(',')
+                    ans.append({"txt": p[0].strip(), "pts": int(p[1]), "rev": False})
+                db.append({"q1": h[0].strip(), "q2": h[1].strip(), "mult": int(h[2]), "a": ans})
+    except:
+        db = [{"q1": "FILE SOAL.TXT ERROR", "q2": "ATAU TIDAK DITEMUKAN", "mult": 1, "a": []}]
+    return db
+
+# --- STATE GAME ---
+db_soal = load_soal_db('soal.txt')
+cur_idx = 0
+st = {
+    "is_fm": False, "is_edit": False, "is_set": False,
+    "lang_idx": 0, "vol": 0.5, "wrong": 0,
+    "sc_a": 0, "sc_b": 0, "round_sc": 0, "mult": 1,
     "names": ["TIM A", "TIM B"],
-    "active_input": None, "buffer": ""
+    "act_in": None, "buf": ""
 }
 
-# --- ASSET LOADING ---
+# --- ASSETS ---
 logos = {}
 sfx = {"benar": {}, "salah": {}}
+for l in lang_list:
+    c = LANG_CONFIG[l]["code"]
+    try:
+        raw = pygame.image.load(f"logos/logo_{c}.png").convert_alpha()
+        ls = pygame.Surface(raw.get_size(), pygame.SRCALPHA)
+        ls.fill(KUNING_LED); ls.blit(raw, (0,0), special_flags=pygame.BLEND_RGBA_MULT)
+        logos[c] = pygame.transform.scale(ls, (180, 100))
+        sfx["benar"][c] = pygame.mixer.Sound(f"sfx/{c}_benar.wav")
+        sfx["salah"][c] = pygame.mixer.Sound(f"sfx/{c}_salah.wav")
+    except: pass
 
-def load_assets():
-    for lang in lang_list:
-        code = LANG_CONFIG[lang]["code"]
-        # Logo LED Processing
-        try:
-            img = pygame.image.load(f"logos/logo_{code}.png").convert_alpha()
-            led_surf = pygame.Surface(img.get_size(), pygame.SRCALPHA)
-            led_surf.fill(LED_YELLOW)
-            led_surf.blit(img, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            logos[code] = pygame.transform.scale(led_surf, (180, 100))
-            # SFX
-            sfx["benar"][code] = pygame.mixer.Sound(f"sfx/{code}_benar.wav")
-            sfx["salah"][code] = pygame.mixer.Sound(f"sfx/{code}_salah.wav")
-        except: pass
-
-load_assets()
-
-# Data Game
-main_data = {"q": ["TEKAN E+Q UNTUK PERTANYAAN", ""], "a": [{"txt": "", "pts": 0, "rev": False} for _ in range(8)]}
 fm_data = {"p1": [{"txt": "", "pts": 0, "sh_t": False, "sh_p": False} for _ in range(5)],
            "p2": [{"txt": "", "pts": 0, "sh_t": False, "sh_p": False} for _ in range(5)], "total": 0}
 
-# --- HELPER FUNCTIONS ---
-def draw_led(text, pos, font=font_led, color=LED_YELLOW, center=False):
+# --- RENDERER ---
+def draw_led(text, pos, font=font_led, color=KUNING_LED, center=False):
     surf = font.render(str(text).upper(), True, color)
     rect = surf.get_rect(center=pos) if center else surf.get_rect(topleft=pos)
     screen.blit(surf, rect)
 
-def play_sfx(kind):
-    code = LANG_CONFIG[lang_list[state["lang_idx"]]]["code"]
-    if code in sfx[kind] and sfx[kind][code]:
-        sfx[kind][code].set_volume(state["volume"])
-        sfx[kind][code].play()
+def play_sfx(k):
+    c = LANG_CONFIG[lang_list[st["lang_idx"]]]["code"]
+    if c in sfx[k] and sfx[k][c]:
+        sfx[k][c].set_volume(st["vol"]); sfx[k][c].play()
 
 # --- MAIN LOOP ---
 def main():
-    global main_data, fm_data # Untuk kemudahan edit
+    global cur_idx, fm_data
     clock = pygame.time.Clock()
     bg = pygame.image.load('board.png')
     bg = pygame.transform.scale(bg, (WIDTH, HEIGHT))
 
     while True:
         screen.blit(bg, (0, 0))
-        cur_lang = LANG_CONFIG[lang_list[state["lang_idx"]]]
+        cur_l = LANG_CONFIG[lang_list[st["lang_idx"]]]
+        soal = db_soal[cur_idx]
         
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT: pygame.quit(); sys.exit()
-            
-            if event.type == pygame.KEYDOWN:
-                # Toggle Modes
-                if event.key == pygame.K_b: state["is_setting"] = not state["is_setting"]; state["is_edit"] = False; state["active_input"] = None
-                if event.key == pygame.K_e: state["is_edit"] = not state["is_edit"]; state["is_setting"] = False; state["active_input"] = None
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT: pygame.quit(); sys.exit()
+            if e.type == pygame.KEYDOWN:
+                # Menu Controls
+                if e.key == pygame.K_b: st["is_set"] = not st["is_set"]; st["is_edit"] = False
+                if e.key == pygame.K_e: st["is_edit"] = not st["is_edit"]; st["is_set"] = False
                 
-                if state["is_edit"] or state["is_setting"]:
-                    if event.key == pygame.K_RETURN and state["active_input"]:
-                        cat, idx, field = state["active_input"]
-                        val = state["buffer"]
-                        if cat == "name": state["names"][idx] = val
-                        elif cat == "vol": state["volume"] = max(0, min(1, int(val)/100))
-                        elif cat == "mq": main_data["q"][idx] = val
-                        elif cat == "ma": 
-                            if field == "t": main_data["a"][idx]["txt"] = val[:36]; state["active_input"] = ("ma", idx, "p"); state["buffer"] = ""; continue
-                            else: main_data["a"][idx]["pts"] = int(val) if val.isdigit() else 0
-                        elif cat == "fm":
-                            p = field # field holds 'p1' or 'p2'
-                            if not fm_data[p][idx]["txt"]: fm_data[p][idx]["txt"] = val[:12]; state["buffer"] = ""; continue
-                            else: fm_data[p][idx]["pts"] = int(val) if val.isdigit() else 0
-                        state["active_input"] = None; state["buffer"] = ""
-                    elif event.key == pygame.K_BACKSPACE: state["buffer"] = state["buffer"][:-1]
+                if st["is_edit"] or st["is_set"]:
+                    if e.key == pygame.K_RETURN and st["act_in"]:
+                        c, i, f = st["act_in"]; v = st["buf"]
+                        if c == "name": st["names"][i] = v
+                        elif c == "vol": st["vol"] = max(0, min(1, int(v)/100))
+                        elif c == "fm":
+                            if f == "t": fm_data[i][c]["txt"] = v[:12]; st["act_in"] = ("fm", i, "p"); st["buf"] = ""; continue
+                            else: fm_data[i][c]["pts"] = int(v) if v.isdigit() else 0
+                        st["act_in"] = None; st["buf"] = ""
+                    elif e.key == pygame.K_BACKSPACE: st["buf"] = st["buf"][:-1]
                     else:
-                        if state["is_setting"]:
-                            if event.key == pygame.K_a: state["active_input"] = ("name", 0, ""); state["buffer"] = ""
-                            if event.key == pygame.K_l: state["active_input"] = ("name", 1, ""); state["buffer"] = ""
-                            if event.key == pygame.K_v: state["active_input"] = ("vol", 0, ""); state["buffer"] = ""
-                            if event.key == pygame.K_g: state["lang_idx"] = (state["lang_idx"] + 1) % len(lang_list); play_sfx("benar")
-                        elif state["is_edit"]:
-                            if not state["is_fast_money"]:
-                                if event.key == pygame.K_q: state["active_input"] = ("mq", 0, ""); state["buffer"] = ""
-                                if event.key == pygame.K_w: state["active_input"] = ("mq", 1, ""); state["buffer"] = ""
-                                if pygame.K_1 <= event.key <= pygame.K_8: state["active_input"] = ("ma", event.key-pygame.K_1, "t"); state["buffer"] = ""
-                            else:
-                                if pygame.K_1 <= event.key <= pygame.K_5: state["active_input"] = ("fm", event.key-pygame.K_1, "p1"); state["buffer"] = ""
-                                if pygame.K_6 <= event.key <= pygame.K_0: state["active_input"] = ("fm", (4 if event.key==pygame.K_0 else event.key-pygame.K_6), "p2"); state["buffer"] = ""
-                        state["buffer"] += event.unicode if event.key not in [pygame.K_RETURN, pygame.K_BACKSPACE, pygame.K_e, pygame.K_b] else ""
-
-                else: # GAMEPLAY
-                    if event.key == pygame.K_f: state["is_fast_money"] = True
-                    if event.key == pygame.K_m: state["is_fast_money"] = False
-                    if event.key == pygame.K_SPACE: state["wrong_timer"] = 45; play_sfx("salah")
+                        if st["is_set"]:
+                            if e.key == pygame.K_a: st["act_in"] = ("name", 0, ""); st["buf"] = ""
+                            if e.key == pygame.K_l: st["act_in"] = ("name", 1, ""); st["buf"] = ""
+                            if e.key == pygame.K_v: st["act_in"] = ("vol", 0, ""); st["buf"] = ""
+                            if e.key == pygame.K_g: st["lang_idx"] = (st["lang_idx"]+1)%len(lang_list); play_sfx("benar")
+                        elif st["is_edit"] and st["is_fm"]:
+                            if pygame.K_1 <= e.key <= pygame.K_5: st["act_in"] = ("fm", e.key-pygame.K_1, "p1"); st["buf"] = ""
+                            if pygame.K_6 <= e.key <= pygame.K_0: st["act_in"] = ("fm", (4 if e.key==pygame.K_0 else e.key-pygame.K_6), "p2"); st["buf"] = ""
+                        st["buf"] += e.unicode if e.key not in [pygame.K_RETURN, pygame.K_BACKSPACE, pygame.K_e, pygame.K_b] else ""
+                else:
+                    # Gameplay
+                    if e.key == pygame.K_f: st["is_fm"] = True
+                    if e.key == pygame.K_m: st["is_fm"] = False
+                    if e.key == pygame.K_SPACE: st["wrong"] = 45; play_sfx("salah")
+                    if e.key == pygame.K_n: cur_idx = (cur_idx+1)%len(db_soal); st["round_sc"] = 0; st["mult"] = db_soal[cur_idx]["mult"]
                     
-                    if not state["is_fast_money"]:
-                        if pygame.K_1 <= event.key <= pygame.K_8:
-                            i = event.key-pygame.K_1
-                            if not main_data["a"][i]["rev"]: main_data["a"][i]["rev"] = True; state["round_score"] += main_data["a"][i]["pts"]*state["mult"]; play_sfx("benar")
-                        if event.key == pygame.K_s: state["mult"] = 1
-                        if event.key == pygame.K_d: state["mult"] = 2
-                        if event.key == pygame.K_t: state["mult"] = 3
-                        if event.key == pygame.K_LEFT: state["score_a"] += state["round_score"]; state["round_score"] = 0
-                        if event.key == pygame.K_RIGHT: state["score_b"] += state["round_score"]; state["round_score"] = 0
+                    if not st["is_fm"]:
+                        if pygame.K_1 <= e.key <= pygame.K_8:
+                            i = e.key-pygame.K_1
+                            if i < len(soal["a"]) and not soal["a"][i]["rev"]:
+                                soal["a"][i]["rev"] = True; st["round_sc"] += soal["a"][i]["pts"]*st["mult"]; play_sfx("benar")
+                        if e.key == pygame.K_LEFT: st["sc_a"] += st["round_sc"]; st["round_sc"] = 0
+                        if e.key == pygame.K_RIGHT: st["sc_b"] += st["round_sc"]; st["round_sc"] = 0
                     else:
-                        # Fast Money Reveal Logic (1-5, 6-0, Q-T, Y-P)
-                        p1_keys = [pygame.K_q, pygame.K_w, pygame.K_e, pygame.K_r, pygame.K_t]
-                        if event.key in p1_keys: 
-                            i = p1_keys.index(event.key)
+                        p1_pts = [pygame.K_q, pygame.K_w, pygame.K_e, pygame.K_r, pygame.K_t]
+                        if e.key in p1_pts:
+                            i = p1_pts.index(e.key)
                             if not fm_data["p1"][i]["sh_p"]: fm_data["p1"][i]["sh_p"] = True; fm_data["total"] += fm_data["p1"][i]["pts"]; play_sfx("benar")
 
-        # --- DRAWING ---
-        # Logo LED
-        code = cur_lang["code"]
-        if code in logos: screen.blit(logos[code], (WIDTH//2 - 90, 140))
+        # --- DRAW ---
+        c_code = cur_l["code"]
+        if c_code in logos: screen.blit(logos[c_code], (WIDTH//2 - 90, 140))
 
-        # Scores & Names
-        draw_led(state["names"][0], (150, 40), font_ui, center=True)
-        draw_led(state["score_a"], (150, 100), font_led_big, center=True)
-        draw_led(cur_lang["label"], (780, 40), font_ui, center=True)
-        draw_led(state["round_score"], (780, 100), font_led_big, center=True)
-        draw_led(state["names"][1], (1410, 40), font_ui, center=True)
-        draw_led(state["score_b"], (1410, 100), font_led_big, center=True)
+        draw_led(st["names"][0], (150, 40), font_ui, center=True)
+        draw_led(st["sc_a"], (150, 100), font_led_big, center=True)
+        draw_led(cur_l["label"], (780, 40), font_ui, center=True)
+        draw_led(st["round_sc"], (780, 100), font_led_big, center=True)
+        draw_led(st["names"][1], (1410, 40), font_ui, center=True)
+        draw_led(st["score_b"] if "score_b" in st else st["sc_b"], (1410, 100), font_led_big, center=True)
 
-        if not state["is_fast_money"]:
-            draw_led(main_data["q"][0], (110, 185), font_ui)
-            draw_led(main_data["q"][1], (110, 235), font_ui)
+        if not st["is_fm"]:
+            draw_led(soal["q1"], (110, 185), font_ui)
+            draw_led(soal["q2"], (110, 235), font_ui)
             for i in range(8):
                 y = 338 + (i * 64)
-                if main_data["a"][i]["rev"] or state["is_edit"]:
-                    draw_led(main_data["a"][i]["txt"], (125, y))
-                    draw_led(main_data["a"][i]["pts"], (1385, y))
-                else: draw_led("."*30, (125, y), color=DARK_YELLOW)
+                if i < len(soal["a"]) and (soal["a"][i]["rev"] or st["is_edit"]):
+                    draw_led(soal["a"][i]["txt"], (125, y))
+                    draw_led(soal["a"][i]["pts"], (1385, y))
+                else: draw_led("."*30, (125, y), color=REDUP_LED)
         else:
             for i in range(5):
                 y = 402 + (i * 64)
-                if fm_data["p1"][i]["sh_t"] or state["is_edit"]: draw_led(fm_data["p1"][i]["txt"], (125, y))
-                if fm_data["p1"][i]["sh_p"] or state["is_edit"]: draw_led(fm_data["p1"][i]["pts"], (650, y))
-                if fm_data["p2"][i]["sh_t"] or state["is_edit"]: draw_led(fm_data["p2"][i]["txt"], (850, y))
-                if fm_data["p2"][i]["sh_p"] or state["is_edit"]: draw_led(fm_data["p2"][i]["pts"], (1385, y))
-            draw_led(f"{cur_lang['total']}: {fm_data['total']}", (810, 880), font_led_big, center=True)
+                if fm_data["p1"][i]["sh_t"] or st["is_edit"]: draw_led(fm_data["p1"][i]["txt"], (125, y))
+                if fm_data["p1"][i][ "sh_p"] or st["is_edit"]: draw_led(fm_data["p1"][i]["pts"], (650, y))
+                if fm_data["p2"][i]["sh_t"] or st["is_edit"]: draw_led(fm_data["p2"][i]["txt"], (850, y))
+                if fm_data["p2"][i]["sh_p"] or st["is_edit"]: draw_led(fm_data["p2"][i]["pts"], (1385, y))
+            draw_led(f"{cur_l['total']}: {fm_data['total']}", (810, 880), font_led_big, center=True)
 
-        if state["is_setting"]: draw_led(f"SETTING: (G) LANG: {lang_list[state['lang_idx']]} | (V) VOL: {int(state['volume']*100)}%", (WIDTH//2, 250), font_ui, color=PURPLE, center=True)
-        if state["active_input"]: draw_led(f"TYPE: {state['buffer']}_", (WIDTH//2, 300), font_led, color=CYAN, center=True)
-
-        if state["wrong_timer"] > 0:
+        if st["is_set"]: draw_led(f"SET: (G) LANG: {lang_list[st['lang_idx']]} | (V) VOL: {int(st['vol']*100)}%", (WIDTH//2, 250), font_ui, color=PURPLE, center=True)
+        if st["act_in"]: draw_led(f"TYPE: {st['buf']}_", (WIDTH//2, 300), font_led, color=CYAN, center=True)
+        if st["wrong"] > 0:
             draw_led("X", (WIDTH//2, HEIGHT//2), pygame.font.SysFont("Arial", 500), color=RED, center=True)
-            state["wrong_timer"] -= 1
+            st["wrong"] -= 1
 
         pygame.display.flip()
         clock.tick(30)
